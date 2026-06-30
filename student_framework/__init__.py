@@ -30,14 +30,22 @@ def build_agent(config: dict[str, Any] | None = None) -> Agent:
     config = config or {} #NO CAMBIAR
     llm = config.get("llm_client") or LLMClient.from_env() #NO CAMBIAR
     kwargs: dict[str, Any] = {"llm_client": llm} #NO CAMBIAR
-    
+
     if "max_history_messages" in config:
         kwargs["max_history_messages"] = config["max_history_messages"]
 
     agent = MyAgent(**kwargs)
 
-    # Ejemplo de registro (elimínenlo cuando sus herramientas estén listas):
-    # from student_framework.tools.example import reverse_string, reverse_string_schema
-    # agent.register_tool(reverse_string, reverse_string_schema)
+    # Tres herramientas obligatorias del M1.
+    from student_framework.tools.calculator import calculator, calculator_schema
+    from student_framework.tools.file_reader import (
+        read_text_file,
+        read_text_file_schema,
+    )
+    from student_framework.tools.word_counter import count_words, count_words_schema
+
+    agent.register_tool(calculator, calculator_schema)
+    agent.register_tool(read_text_file, read_text_file_schema)
+    agent.register_tool(count_words, count_words_schema)
 
     return agent

@@ -10,11 +10,10 @@ Los tests de conformidad en `tests/conformance/test_m1.py` y
 """
 
 from __future__ import annotations
-
+import json
 from typing import Any, Callable
-
 from mia_agents.protocols import LLMClient
-from mia_agents.types import AgentResult, ToolSchema
+from mia_agents.types import AgentResult, AgentStep, ToolCall, ToolSchema
 
 
 class MyAgent:
@@ -48,8 +47,11 @@ class MyAgent:
         self._system = system_prompt
         self._max_iterations = max_iterations
         self._max_history_messages = max_history_messages
-        # TODO (M1): inicializa el estado interno para las herramientas registradas.
-        # TODO (M2): inicializa la estructura de historial conversacional.
+        # Estado de las herramientas registradas. Dos diccionarios
+        # indexados por nombre de esquema: uno guarda el callable a
+        # ejecutar, el otro el ToolSchema a exponer al LLM en `chat`.
+        self._tools: dict[str, Callable[..., str]] = {}
+        self._schemas: dict[str, ToolSchema] = {}
 
     def register_tool(
         self,
@@ -65,7 +67,8 @@ class MyAgent:
         El callable se invoca con kwargs que coinciden con la firma.
         Debe devolver una cadena.
         """
-        raise NotImplementedError("M1: implementa el registro de herramientas")
+        self._tools[schema.name] = tool
+        self._schemas[schema.name] = schema
 
     def run(self, user_message: str) -> AgentResult:
         """Ejecuta el bucle del agente hasta una respuesta final o hasta max_iterations.
@@ -91,7 +94,129 @@ class MyAgent:
         `LLMResponse` y exponlos en `AgentResult.input_tokens` /
         `AgentResult.output_tokens`.
         """
-        raise NotImplementedError("M1: implementa el bucle del agente")
+        messages: list[dict[str, Any]] = [
+            {"role": "user", "content": user_message}
+        ]
+        steps: list[AgentStep] = []
+        # Tokens: permanecen None salvo que algún LLMResponse reporte
+        # tokens; en ese caso se acumulan tratando None por respuesta
+        # como 0 (ver docstring de AgentResult).
+        input_tokens: int | None = None
+        output_tokens: int | None = None
+
+        last_content: str = ""
+
+        for _ in range(self._max_iterations):
+            resp = self._llm.chat(
+                messages=messages,
+                tools=list(self._schemas.values()) if self._schemas else None,
+                system=self._system,
+            )
+
+            input_tokens = _accumulate(input_tokens, resp.input_tokens)
+            output_tokens = _accumulate(output_tokens, resp.output_tokens)
+            last_content = resp.content or ""
+
+            # Condición de parada M1: texto sin tool_calls -> respuesta final.
+            if not resp.tool_calls:
+                return AgentResult(
+                    answer=last_content,
+                    steps=steps,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                )
+
+            # Hay tool_calls: registramos el turno del asistente (con las
+            # llamadas) y ejecutamos cada herramienta, volcando su salida
+            # como mensajes `role: "tool"` antes de la siguiente llamada.
+            messages.append(_assistant_message(resp.content, resp.tool_calls))
+
+            for call in resp.tool_calls:
+                step, tool_content = self._execute_tool_call(call)
+                steps.append(step)
+                messages.append(
+                    {
+                        "role": "tool",
+                        "content": tool_content,
+                        "tool_call_id": call.id,
+                    }
+                )
+
+        # Se agotó el presupuesto de iteraciones sin respuesta final de
+        # texto. Devolvemos igualmente un AgentResult válido.
+        return AgentResult(
+            answer=last_content,
+            steps=steps,
+            error=f"Se alcanzó el límite de {self._max_iterations} iteraciones.",
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
+
+    def _execute_tool_call(self, call: ToolCall) -> tuple[AgentStep, str]:
+        """Ejecuta un tool_call y devuelve (AgentStep, contenido para el LLM).
+
+        Maneja con robustez tres situaciones de error sin romper el bucle:
+        argumentos JSON malformados, herramienta inexistente (alucinada por
+        el LLM) y excepciones lanzadas por el callable. En todos esos casos
+        el `AgentStep` queda con `error` no nulo.
+        """
+        # Parsear los argumentos (JSON) emitidos por el LLM.
+        try:
+            kwargs = json.loads(call.arguments) if call.arguments else {}
+            if not isinstance(kwargs, dict):
+                raise ValueError("los argumentos no son un objeto JSON")
+        except (json.JSONDecodeError, ValueError) as exc:
+            error = f"Argumentos inválidos para '{call.name}': {exc}"
+            return (
+                AgentStep(
+                    tool_name=call.name,
+                    tool_input=call.arguments,
+                    tool_output=None,
+                    error=error,
+                ),
+                error,
+            )
+
+        # Resolver la herramienta. Si el LLM alucina un nombre que no
+        # existe, no rompemos: lo registramos como paso con error.
+        tool = self._tools.get(call.name)
+        if tool is None:
+            error = f"Herramienta desconocida: '{call.name}'."
+            return (
+                AgentStep(
+                    tool_name=call.name,
+                    tool_input=call.arguments,
+                    tool_output=None,
+                    error=error,
+                ),
+                error,
+            )
+
+        # Ejecutar el callable con los kwargs parseados.
+        try:
+            output = tool(**kwargs)
+        except Exception as exc:  # noqa: BLE001 - el agente no debe romperse
+            error = f"Error ejecutando '{call.name}': {exc}"
+            return (
+                AgentStep(
+                    tool_name=call.name,
+                    tool_input=call.arguments,
+                    tool_output=None,
+                    error=error,
+                ),
+                error,
+            )
+
+        output_str = output if isinstance(output, str) else str(output)
+        return (
+            AgentStep(
+                tool_name=call.name,
+                tool_input=call.arguments,
+                tool_output=output_str,
+                error=None,
+            ),
+            output_str,
+        )
 
     def structured_call(
         self,
@@ -121,3 +246,37 @@ class MyAgent:
         El M1 deja esto como stub; los tests de M2 verifican el contrato.
         """
         raise NotImplementedError("M2: implementa salida estructurada con reparación")
+
+
+def _accumulate(total: int | None, value: int | None) -> int | None:
+    """Suma tokens manteniendo None hasta que llega el primer valor real.
+
+    Devuelve None si tanto el acumulado como el nuevo valor son None; en
+    cuanto algún `LLMResponse` reporta tokens, empieza a sumar tratando los
+    None posteriores como 0 (contrato de `AgentResult.input/output_tokens`).
+    """
+    if value is None:
+        return total
+    return (total or 0) + value
+
+
+def _assistant_message(
+    content: str | None, tool_calls: list[ToolCall]
+) -> dict[str, Any]:
+    """Construye el mensaje `assistant` con sus tool_calls para el historial.
+
+    El formato (clave `function` con `name`/`arguments`) es el que esperan
+    los proveedores reales (`OllamaProvider`/`BedrockProvider`) al re-enviar
+    el historial; el `MockLLMClient` lo ignora y solo registra la llamada.
+    """
+    return {
+        "role": "assistant",
+        "content": content or "",
+        "tool_calls": [
+            {
+                "id": call.id,
+                "function": {"name": call.name, "arguments": call.arguments},
+            }
+            for call in tool_calls
+        ],
+    }
