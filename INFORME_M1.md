@@ -10,11 +10,11 @@
 El framework separa lo provisto por la cátedra, en `mia_agents/` de lo realizado para la entrega (`student_framework/`). La única puerta de entrada pública es `build_agent`, que tanto la CLI como los tests de conformidad invocan.
 
 ```
-                          ┌──────────────────────────────────────┐
-   usuario / test         │            student_framework/        │
-       │                  │                                      │
-       │  user_message    │   build_agent(config) ──► MyAgent    │
-       ▼                  │        │                    │  ▲     │
+                          ┌───────────────────────────────────────┐
+   usuario / test         │            student_framework/         │
+       │                  │                                       │
+       │  user_message    │   build_agent(config) ──► MyAgent     │ 
+       ▼                  │        │                     │  ▲     │
  ┌───────────┐  run(msg)  │        │ register_tool(fn,   │  │     │
  │  CLI /    │───────────►│        │      schema) x3     │  │     │
  │  pytest   │            │        ▼                     │  │     │
@@ -26,25 +26,25 @@ El framework separa lo provisto por la cátedra, en `mia_agents/` de lo realizad
                           │   └──────────────┘           │  │     │
                           └──────────────────────────────┼──┼─────┘
                                                          │  │
-                          ┌──────────────────────────────▼──┴─────┐
-       bucle run():       │            MyAgent.run()              │
-                          │                                       │
-   ┌──────────────────────┤  1. messages = [user_message]        │
-   │                      │  2. resp = self._llm.chat(            │
-   │                      │        messages,                      │
-   │   ┌──────────────┐   │        tools=list(_schemas.values()), │
-   │   │  LLMClient   │◄──┤        system)                        │
-   │   │ (protocolo   │   │  3. ¿resp.tool_calls?                 │
+                          ┌──────────────────────────────▼──┴──────┐
+       bucle run():       │            MyAgent.run()               │
+                          │                                        │
+   ┌──────────────────────┤  1. messages = [user_message]          │
+   │                      │  2. resp = self._llm.chat(             │
+   │                      │        messages,                       │
+   │   ┌──────────────┐   │        tools=list(_schemas.values()),  │
+   │   │  LLMClient   │◄──┤        system)                         │
+   │   │ (protocolo   │   │  3. ¿resp.tool_calls?                  │
    │   │  chat(...))  │──►│       NO ► answer = resp.content ─► fin│
-   │   └──────┬───────┘   │       SÍ ► por cada tool_call:        │
-   │         │            │            ejecutar callable,         │
-   │   ┌──────▼───────┐   │            AgentStep, msg role:"tool" │
-   │   │ Bedrock /    │   │  4. repetir hasta max_iterations      │
-   │   │ Ollama /     │   └───────────────────────────────────────┘
+   │   └──────┬───────┘   │       SÍ ► por cada tool_call:         │
+   │          │           │            ejecutar callable,          │
+   │   ┌──────▼───────┐   │            AgentStep, msg role:"tool"  │
+   │   │ Bedrock /    │   │  4. repetir hasta max_iterations       │
+   │   │ Ollama /     │   └────────────────────────────────────────┘
    │   │ MockLLMClient│                     │
    │   └──────────────┘                     ▼
-   │                                  AgentResult(answer, steps,
-   └─ (inyectado vía config["llm_client"])  input/output_tokens, error)
+   │                                  AgentResult(answer, steps, input/output_tokens, error)
+   └───────────────────────────────── (inyectado vía config["llm_client"]) 
 ```
 
 **Lectura del diagrama:**
