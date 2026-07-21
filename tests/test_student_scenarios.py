@@ -55,10 +55,12 @@ def test_file_reader_archivo_inexistente() -> None:
     assert out.startswith("Error:")
 
 
-def test_file_reader_lee_contenido(tmp_path) -> None:
-    f = tmp_path / "hola.txt"
-    f.write_text("línea uno\nlínea dos\n", encoding="utf-8")
-    assert read_text_file(path=str(f)) == "línea uno\nlínea dos\n"
+def test_file_reader_lee_contenido(tmp_path, monkeypatch) -> None:
+    # El lector trabaja dentro de un sandbox (el cwd), así que nos paramos
+    # en el tmp_path y usamos rutas relativas.
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "hola.txt").write_text("línea uno\nlínea dos\n", encoding="utf-8")
+    assert read_text_file(path="hola.txt") == "línea uno\nlínea dos\n"
 
 
 def test_word_counter() -> None:
@@ -72,16 +74,18 @@ def test_word_counter() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_escenario_leer_y_contar(tmp_path) -> None:
-    archivo = tmp_path / "poema.txt"
-    archivo.write_text("rosas son rojas violetas azules", encoding="utf-8")
+def test_escenario_leer_y_contar(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "poema.txt").write_text(
+        "rosas son rojas violetas azules", encoding="utf-8"
+    )
 
     mock = MockLLMClient(
         [
             # Turno 1: el LLM pide leer el archivo.
             LLMResponse(
                 content=None,
-                tool_calls=[_tc("read_text_file", {"path": str(archivo)}, "a1")],
+                tool_calls=[_tc("read_text_file", {"path": "poema.txt"}, "a1")],
             ),
             # Turno 2: con el contenido, pide contar palabras.
             LLMResponse(
