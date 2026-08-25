@@ -12,9 +12,12 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from mia_agents._env import load_env_files
 from mia_agents.llm_client import BedrockProvider, LLMClient
 
-JUDGE_MODEL_DEFAULT = "amazon.nova-pro-v1:0"
+# Nova Pro no admite on-demand con el id pelado: hay que invocarlo por el
+# inference profile entre regiones.
+JUDGE_MODEL_DEFAULT = "us.amazon.nova-pro-v1:0"
 MAX_TRACE_CALLS = 40
 MAX_OUTPUT_CHARS = 400
 
@@ -109,11 +112,18 @@ def _formatear_traza(run: dict[str, Any]) -> str:
     return "\n".join(lineas) or "(el agente no invocó ninguna herramienta)"
 
 
+def modelo_juez() -> str:
+    return os.environ.get("MIA_JUDGE_MODEL", JUDGE_MODEL_DEFAULT)
+
+
 def construir_juez(model_id: str | None = None) -> Any:
     """`MyAgent` apuntando al modelo juez."""
     from student_framework.agent import MyAgent
 
-    modelo = model_id or os.environ.get("MIA_JUDGE_MODEL", JUDGE_MODEL_DEFAULT)
+    # `BedrockProvider` construido a mano no dispara la carga del .env que
+    # sí hace `LLMClient.from_env()`.
+    load_env_files()
+    modelo = model_id or modelo_juez()
     return MyAgent(
         llm_client=LLMClient(BedrockProvider(model=modelo)),
         system_prompt=(
@@ -142,7 +152,7 @@ def juzgar(run: dict[str, Any], user_message: str, juez: Any = None) -> dict[str
     except Exception as exc:  # noqa: BLE001
         return {"error": f"{type(exc).__name__}: {exc}"}
     datos = veredicto.model_dump()
-    datos["modelo_juez"] = os.environ.get("MIA_JUDGE_MODEL", JUDGE_MODEL_DEFAULT)
+    datos["modelo_juez"] = modelo_juez()
     return datos
 
 

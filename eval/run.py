@@ -86,6 +86,27 @@ def _estimar(escenarios: list, experimentos: list[str], reps: int) -> None:
     print("Es un techo. Las corridas que resuelven temprano cuestan menos.")
 
 
+def _juzgar_todo(registros: list[dict], escenarios: list) -> dict[str, dict]:
+    from eval.judge import construir_juez, juzgar
+
+    print(f"\nJuez LLM sobre {len(registros)} corridas...")
+    juez = construir_juez()
+    mensajes = {s.id: s.user_message for s in escenarios}
+    veredictos: dict[str, dict] = {}
+    filas = []
+    for i, rec in enumerate(registros, 1):
+        v = juzgar(rec, mensajes.get(rec["scenario_id"], ""), juez)
+        veredictos[rec["run_id"]] = v
+        filas.append({"run_id": rec["run_id"], "veredicto": v})
+        estado = "error" if "error" in v else "ok"
+        print(f"  [{i:>3}/{len(registros)}] {rec['scenario_id']:<22} {estado}")
+        escribir_jsonl(JUDGMENTS_PATH, filas)
+    fallos = sum(1 for v in veredictos.values() if "error" in v)
+    if fallos:
+        print(f"  {fallos} veredictos fallaron.")
+    return veredictos
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="eval/run.py", description=__doc__)
     p.add_argument("--reps", type=int, default=3,
@@ -98,6 +119,8 @@ def main(argv: list[str] | None = None) -> int:
                    help="Atajo para --experimentos baseline.")
     p.add_argument("--sin-juez", action="store_true",
                    help="Salta la rúbrica LLM.")
+    p.add_argument("--solo-juez", action="store_true",
+                   help="Corre la rúbrica sobre runs.jsonl, sin repetir el barrido.")
     p.add_argument("--solo-informe", action="store_true",
                    help="Regenera report.md desde los jsonl.")
     p.add_argument("--estimar", action="store_true",
@@ -118,6 +141,15 @@ def main(argv: list[str] | None = None) -> int:
         veredictos = {v["run_id"]: v["veredicto"] for v in leer_jsonl(JUDGMENTS_PATH)}
         escribir_informe(REPORT_PATH, runs, veredictos)
         print(f"Informe regenerado: {REPORT_PATH}  ({len(runs)} corridas)")
+        return 0
+
+    if args.solo_juez:
+        runs = leer_jsonl(RUNS_PATH)
+        if not runs:
+            raise SystemExit(f"No hay corridas en {RUNS_PATH}.")
+        veredictos = _juzgar_todo(runs, list_scenarios(SCENARIOS_DIR))
+        escribir_informe(REPORT_PATH, runs, veredictos)
+        print(f"\nInforme: {REPORT_PATH}")
         return 0
 
     experimentos = (
@@ -176,19 +208,7 @@ def main(argv: list[str] | None = None) -> int:
 
     veredictos: dict[str, dict] = {}
     if not args.sin_juez:
-        from eval.judge import construir_juez, juzgar
-
-        print(f"\nJuez LLM sobre {len(registros)} corridas...")
-        juez = construir_juez()
-        mensajes = {s.id: s.user_message for s in escenarios}
-        filas = []
-        for i, rec in enumerate(registros, 1):
-            v = juzgar(rec, mensajes.get(rec["scenario_id"], ""), juez)
-            veredictos[rec["run_id"]] = v
-            filas.append({"run_id": rec["run_id"], "veredicto": v})
-            estado = "error" if "error" in v else "ok"
-            print(f"  [{i:>3}/{len(registros)}] {rec['scenario_id']:<22} {estado}")
-            escribir_jsonl(JUDGMENTS_PATH, filas)
+        veredictos = _juzgar_todo(registros, escenarios)
 
     escribir_informe(REPORT_PATH, registros, veredictos)
     print(f"\nInforme: {REPORT_PATH}")

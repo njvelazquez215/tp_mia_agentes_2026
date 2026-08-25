@@ -245,3 +245,23 @@ def test_coste_usa_la_tarifa_del_modelo() -> None:
     assert estimate_cost("amazon.nova-lite-v1:0", 1_000_000, 0) == pytest.approx(0.06)
     assert estimate_cost("amazon.nova-lite-v1:0", 0, 1_000_000) == pytest.approx(0.24)
     assert estimate_cost("modelo-raro", 1_000_000, 1_000_000) == 0.0
+
+
+# --- Configuración del juez ------------------------------------------------
+
+
+def test_modelo_juez_usa_inference_profile() -> None:
+    """Nova Pro rechaza on-demand con el id pelado; necesita el perfil `us.`."""
+    from eval.judge import JUDGE_MODEL_DEFAULT
+
+    assert JUDGE_MODEL_DEFAULT.startswith("us."), JUDGE_MODEL_DEFAULT
+
+
+def test_juez_es_distinto_del_actor() -> None:
+    """Un modelo que se evalúa a sí mismo tiende a preferir su propia salida."""
+    import os
+
+    from eval.judge import modelo_juez
+
+    actor = os.environ.get("BEDROCK_MODEL_ID", "amazon.nova-lite-v1:0")
+    assert modelo_juez() != actor
